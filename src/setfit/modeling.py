@@ -83,7 +83,7 @@ class SetFitHead(models.Dense):
     ) -> None:
         super(models.Dense, self).__init__()  # init on models.Dense's parent: nn.Module
 
-        if out_features == 1:
+        if not multitarget and out_features == 1:
             logger.warning(
                 "Change `out_features` from 1 to 2 since we use `CrossEntropyLoss` for binary classification."
             )
