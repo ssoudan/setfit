@@ -1,0 +1,18 @@
+name: setfit
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch
+  - pip
+  - pip:
+    - datasets>=2.3.0
+    - sentence-transformers>=2.2.1
+    - evaluate>=0.3.0
+    - huggingface-hub>=0.13.0, <=0.23.5
+    - scikit-learn
+    - packaging
+    - pytest
+    - tensorboard
+    - numpy<2.0.0
