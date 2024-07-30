@@ -28,6 +28,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.multioutput import ClassifierChain, MultiOutputClassifier
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm, trange
 from transformers.utils import copy_func
 
@@ -56,7 +57,8 @@ class SetFitHead(models.Dense):
         in_features (`int`, *optional*):
             The embedding dimension from the output of the SetFit body. If `None`, defaults to `LazyLinear`.
         out_features (`int`, defaults to `2`):
-            The number of targets. If set `out_features` to 1 for binary classification, it will be changed to 2 as 2-class classification.
+            The number of targets. If set `out_features` to 1 for binary classification, it will be changed 
+            to 2 as 2-class classification unless `multitarget` is true.
         temperature (`float`, defaults to `1.0`):
             A logits' scaling factor. Higher values make the model less confident and lower values make
             it more confident.
@@ -195,6 +197,115 @@ class SetFitHead(models.Dense):
     def __repr__(self) -> str:
         return "SetFitHead({})".format(self.get_config_dict())
 
+class TrainerState:
+    """A class to store the state of the Trainer during training."""
+
+    def __init__(self):
+        # state
+        self.global_step = 0
+        self.epoch = 0
+
+class TrainerCallback:
+    """A parent class for all callbacks to be used with the Trainer."""
+
+    def on_train_begin(self, state: TrainerState):
+        pass
+
+    def on_train_end(self, state: TrainerState):
+        pass
+
+    def on_epoch_begin(self, state: TrainerState):
+        pass
+
+    def on_epoch_end(self, state: TrainerState):
+        pass
+
+    def on_batch_begin(self, state: TrainerState):
+        pass
+
+    def on_batch_end(self, state: TrainerState, loss: torch.Tensor, lr: float):
+        pass
+
+    def on_eval_begin(self, state: TrainerState):
+        pass
+
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
+        pass
+
+class TrainerCallbacksHandler:
+    """A class to handle multiple callbacks for the Trainer."""
+
+    def __init__(self, callbacks: List[TrainerCallback]):
+        self.callbacks = callbacks
+
+    def on_train_begin(self, state: TrainerState):
+        # reset the global step and epoch
+        state.global_step = 0
+        state.epoch = 0
+
+        for callback in self.callbacks:
+            callback.on_train_begin(state)
+
+    def on_train_end(self, state: TrainerState):
+        for callback in self.callbacks:
+            callback.on_train_end(state)
+
+    def on_epoch_begin(self, state: TrainerState):
+        for callback in self.callbacks:
+            callback.on_epoch_begin(state)
+
+    def on_epoch_end(self, state: TrainerState):
+        # increment the epoch
+        state.epoch += 1
+
+        for callback in self.callbacks:
+            callback.on_epoch_end(state)
+
+    def on_batch_begin(self, state: TrainerState):
+        for callback in self.callbacks:
+            callback.on_batch_begin(state)
+
+    def on_batch_end(self, state: TrainerState, loss: torch.Tensor, lr: float):
+        # increment the global step
+        state.global_step += 1
+
+        for callback in self.callbacks:
+            callback.on_batch_end(state, loss, lr)
+
+    def on_eval_begin(self, state: TrainerState):
+        for callback in self.callbacks:
+            callback.on_eval_begin(state)
+
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
+        for callback in self.callbacks:
+            callback.on_eval_end(state, loss)
+
+
+class TensorboardCallback(TrainerCallback):
+    """A callback to log metrics to Tensorboard during training.
+
+    Args:
+        log_dir (`str`): The directory to save the Tensorboard logs.
+        logging_steps (`int`): The step interval to log metrics - must be a multiple of the batch size.
+    """
+
+    def __init__(self, logging_dir: str, logging_steps: int):
+        self.writer = SummaryWriter(log_dir=logging_dir)
+        self.logging_steps = logging_steps
+
+    def on_epoch_end(self, state: TrainerState):
+        self.writer.add_scalar("train/classifier_epoch", state.epoch, state.global_step)
+
+    def on_batch_end(self, state: TrainerState, loss: torch.Tensor, lr: float):
+        if state.global_step % self.logging_steps == 0 or state.global_step == 1:
+            self.writer.add_scalar("train/classifier_loss", loss, state.global_step, new_style=True)
+            self.writer.add_scalar("train/classifier_learning_rate", lr, state.global_step, new_style=True)
+
+    def on_train_end(self, state: TrainerState):
+        self.writer.close()
+
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
+        self.writer.add_scalar("eval/classifier_loss", loss, state.global_step, new_style=True)
 
 @dataclass
 class SetFitModel(PyTorchModelHubMixin):
@@ -249,8 +360,10 @@ class SetFitModel(PyTorchModelHubMixin):
     def fit(
         self,
         x_train: List[str],
-        y_train: Union[List[int], List[List[int]]],
+        y_train: Union[List[int], List[List[int]]],        
         num_epochs: int,
+        x_eval: Optional[List[str]] = None,
+        y_eval: Optional[Union[List[int], List[List[int]]]] = None,
         batch_size: Optional[int] = None,
         body_learning_rate: Optional[float] = None,
         head_learning_rate: Optional[float] = None,
@@ -258,6 +371,11 @@ class SetFitModel(PyTorchModelHubMixin):
         l2_weight: Optional[float] = None,
         max_length: Optional[int] = None,
         show_progress_bar: bool = True,
+        logging_dir: Optional[str] = None,
+        logging_steps: Optional[int] = None,
+        eval_steps: Optional[int] = None,
+        eval_max_steps: Optional[int] = None,
+        eval_batch_size: int = 1,
     ) -> None:
         """Train the classifier head, only used if a differentiable PyTorch head is used.
 
@@ -265,6 +383,8 @@ class SetFitModel(PyTorchModelHubMixin):
             x_train (`List[str]`): A list of training sentences.
             y_train (`Union[List[int], List[List[int]]]`): A list of labels corresponding to the training sentences.
             num_epochs (`int`): The number of epochs to train for.
+            x_eval (`Optional[List[str]]`, *optional*): A list of evaluation sentences.
+            y_eval (`Optional[Union[List[int], List[List[int]]]`, *optional*): A list of labels corresponding to the evaluation sentences.
             batch_size (`int`, *optional*): The batch size to use.
             body_learning_rate (`float`, *optional*): The learning rate for the `SentenceTransformer` body
                 in the `AdamW` optimizer. Disregarded if `end_to_end=False`.
@@ -278,19 +398,39 @@ class SetFitModel(PyTorchModelHubMixin):
                 the maximum length for the `SentenceTransformer` body is used.
             show_progress_bar (`bool`, defaults to `True`): Whether to display a progress bar for the training
                 epochs and iterations.
+            logging_dir (`str`, *optional*): The directory to save the Tensorboard logs.
+            logging_steps (`int`, *optional*): The step interval to log metrics - must be a multiple of the batch size.
+            eval_steps (`int`, *optional*): The step interval to evaluate the model on the evaluation set.
+            eval_max_steps (`int`, *optional*): The maximum number of steps to evaluate the model on the evaluation set.
+            eval_batch_size (`int`, defaults to `1`): The batch size to use for evaluation.
         """
         if self.has_differentiable_head:  # train with pyTorch
             self.model_body.train()
             self.model_head.train()
             if not end_to_end:
                 self.freeze("body")
+            
+            trainer_state = TrainerState()
+            
+            callback_handler = TrainerCallbacksHandler([TensorboardCallback(logging_dir=logging_dir, logging_steps=logging_steps)])
 
             dataloader = self._prepare_dataloader(x_train, y_train, batch_size, max_length)
             criterion = self.model_head.get_loss_fn()
             optimizer = self._prepare_optimizer(head_learning_rate, body_learning_rate, l2_weight)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+
+            if x_eval and y_eval:
+                eval_dataloader = self._prepare_dataloader(x_eval, y_eval, eval_batch_size, max_length)
+                eval_max_steps = min(eval_max_steps or len(eval_dataloader), len(eval_dataloader))
+            else:
+                eval_dataloader = None
+
+            callback_handler.on_train_begin(trainer_state)
+
             for epoch_idx in trange(num_epochs, desc="Epoch", disable=not show_progress_bar):
+                callback_handler.on_epoch_begin(trainer_state)
                 for batch in tqdm(dataloader, desc="Iteration", disable=not show_progress_bar, leave=False):
+                    callback_handler.on_batch_begin(trainer_state)
                     features, labels = batch
                     optimizer.zero_grad()
 
@@ -308,9 +448,62 @@ class SetFitModel(PyTorchModelHubMixin):
 
                     loss: torch.Tensor = criterion(logits, labels)
                     loss.backward()
+
                     optimizer.step()
+                    callback_handler.on_batch_end(trainer_state, loss, optimizer.param_groups[0]["lr"])
+
+                    # evaluation
+                    if eval_dataloader and eval_steps and (trainer_state.global_step % eval_steps == 0 or trainer_state.global_step == 1):
+
+                        callback_handler.on_eval_begin(trainer_state)
+                        
+                        eval_loss = 0.0
+                        steps = 0
+
+                        # set model to eval mode
+                        self.model_body.eval()
+                        self.model_head.eval()
+                        if not end_to_end:
+                            self.unfreeze("body")
+
+                        with torch.no_grad():
+                            # take eval_steps number of steps
+                            for eval_batch in eval_dataloader:
+                                eval_features, eval_batch_labels = eval_batch
+
+                                eval_features = {k: v.to(self.device) for k, v in eval_features.items()}
+                                eval_batch_labels = eval_batch_labels.to(self.device)
+
+                                eval_outputs = self.model_body(eval_features)
+                                if self.normalize_embeddings:
+                                    eval_outputs["sentence_embedding"] = nn.functional.normalize(
+                                        eval_outputs["sentence_embedding"], p=2, dim=1
+                                    )
+                                eval_outputs = self.model_head(eval_outputs)
+                                eval_logits = eval_outputs["logits"]
+
+                                eval_loss += criterion(eval_logits, eval_batch_labels).item()
+                                steps += 1
+
+                                if steps >= eval_max_steps:
+                                    break
+
+                        if steps > 0:
+                            eval_loss /= steps
+
+                        callback_handler.on_eval_end(trainer_state, eval_loss)
+
+                        # set model to training mode
+                        self.model_body.train()
+                        self.model_head.train()
+                        if not end_to_end:
+                            self.freeze("body")
+                        
 
                 scheduler.step()
+                callback_handler.on_epoch_end(trainer_state)
+
+            callback_handler.on_train_end(trainer_state)
 
             if not end_to_end:
                 self.unfreeze("body")

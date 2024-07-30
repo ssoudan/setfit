@@ -408,7 +408,7 @@ class Trainer(ColumnMappingMixin):
         )
 
         self.train_embeddings(*full_parameters, args=args)
-        self.train_classifier(*train_parameters, args=args)
+        self.train_classifier(*full_parameters, args=args)
 
     def dataset_to_parameters(self, dataset: Dataset) -> List[Iterable]:
         return [dataset["text"], dataset["label"]]
@@ -771,7 +771,12 @@ class Trainer(ColumnMappingMixin):
         return checkpoint_file_path
 
     def train_classifier(
-        self, x_train: List[str], y_train: Union[List[int], List[List[int]]], args: Optional[TrainingArguments] = None
+        self, 
+        x_train: List[str], 
+        y_train: Union[List[int], List[List[int]]], 
+        x_eval: Optional[List[str]] = None,
+        y_eval: Optional[Union[List[int], List[List[int]]]] = None,
+        args: Optional[TrainingArguments] = None
     ) -> None:
         """
         Method to perform the classifier phase: fitting a classifier head.
@@ -784,9 +789,18 @@ class Trainer(ColumnMappingMixin):
         """
         args = args or self.args or TrainingArguments()
 
+        if x_eval is not None:
+            eval_steps = args.eval_steps if args.eval_steps is not None else args.logging_steps
+            eval_max_steps = min(len(x_eval), args.eval_max_steps) if args.eval_max_steps != -1 else len(x_eval)
+        else:
+            eval_steps = None
+            eval_max_steps = None
+
         self.model.fit(
             x_train,
             y_train,
+            x_eval=x_eval,
+            y_eval=y_eval,            
             num_epochs=args.classifier_num_epochs,
             batch_size=args.classifier_batch_size,
             body_learning_rate=args.body_classifier_learning_rate,
@@ -795,6 +809,10 @@ class Trainer(ColumnMappingMixin):
             max_length=args.max_length,
             show_progress_bar=args.show_progress_bar,
             end_to_end=args.end_to_end,
+            logging_dir=args.logging_dir,
+            logging_steps=args.logging_steps,
+            eval_steps=eval_steps,
+            eval_max_steps=eval_max_steps,
         )
 
     def evaluate(self, dataset: Optional[Dataset] = None, metric_key_prefix: str = "test") -> Dict[str, float]:
@@ -1004,6 +1022,8 @@ class SetFitTrainer(Trainer):
         distance_metric: Callable = BatchHardTripletLossDistanceFunction.cosine_distance,
         margin: float = 0.25,
         samples_per_label: int = 2,
+        eval_steps: Optional[int] = None,
+        eval_max_steps: int = 10,
     ):
         warnings.warn(
             "`SetFitTrainer` has been deprecated and will be removed in v2.0.0 of SetFit. "
@@ -1024,6 +1044,8 @@ class SetFitTrainer(Trainer):
             margin=margin,
             samples_per_label=samples_per_label,
             loss=loss_class,
+            eval_steps=eval_steps,
+            eval_max_steps=eval_max_steps,
         )
         super().__init__(
             model=model,
