@@ -57,7 +57,7 @@ class SetFitHead(models.Dense):
         in_features (`int`, *optional*):
             The embedding dimension from the output of the SetFit body. If `None`, defaults to `LazyLinear`.
         out_features (`int`, defaults to `2`):
-            The number of targets. If set `out_features` to 1 for binary classification, it will be changed 
+            The number of targets. If set `out_features` to 1 for binary classification, it will be changed
             to 2 as 2-class classification unless `multitarget` is true.
         temperature (`float`, defaults to `1.0`):
             A logits' scaling factor. Higher values make the model less confident and lower values make
@@ -197,6 +197,7 @@ class SetFitHead(models.Dense):
     def __repr__(self) -> str:
         return "SetFitHead({})".format(self.get_config_dict())
 
+
 class TrainerState:
     """A class to store the state of the Trainer during training."""
 
@@ -204,6 +205,7 @@ class TrainerState:
         # state
         self.global_step = 0
         self.epoch = 0
+
 
 class TrainerCallback:
     """A parent class for all callbacks to be used with the Trainer."""
@@ -231,6 +233,7 @@ class TrainerCallback:
 
     def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
         pass
+
 
 class TrainerCallbacksHandler:
     """A class to handle multiple callbacks for the Trainer."""
@@ -307,6 +310,7 @@ class TensorboardCallback(TrainerCallback):
     def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
         self.writer.add_scalar("eval/classifier_loss", loss, state.global_step, new_style=True)
 
+
 @dataclass
 class SetFitModel(PyTorchModelHubMixin):
     """A SetFit model with integration to the [Hugging Face Hub](https://huggingface.co).
@@ -360,7 +364,7 @@ class SetFitModel(PyTorchModelHubMixin):
     def fit(
         self,
         x_train: List[str],
-        y_train: Union[List[int], List[List[int]]],        
+        y_train: Union[List[int], List[List[int]]],
         num_epochs: int,
         x_eval: Optional[List[str]] = None,
         y_eval: Optional[Union[List[int], List[List[int]]]] = None,
@@ -409,10 +413,12 @@ class SetFitModel(PyTorchModelHubMixin):
             self.model_head.train()
             if not end_to_end:
                 self.freeze("body")
-            
+
             trainer_state = TrainerState()
-            
-            callback_handler = TrainerCallbacksHandler([TensorboardCallback(logging_dir=logging_dir, logging_steps=logging_steps)])
+
+            callback_handler = TrainerCallbacksHandler(
+                [TensorboardCallback(logging_dir=logging_dir, logging_steps=logging_steps)]
+            )
 
             dataloader = self._prepare_dataloader(x_train, y_train, batch_size, max_length)
             criterion = self.model_head.get_loss_fn()
@@ -453,10 +459,14 @@ class SetFitModel(PyTorchModelHubMixin):
                     callback_handler.on_batch_end(trainer_state, loss, optimizer.param_groups[0]["lr"])
 
                     # evaluation
-                    if eval_dataloader and eval_steps and (trainer_state.global_step % eval_steps == 0 or trainer_state.global_step == 1):
+                    if (
+                        eval_dataloader
+                        and eval_steps
+                        and (trainer_state.global_step % eval_steps == 0 or trainer_state.global_step == 1)
+                    ):
 
                         callback_handler.on_eval_begin(trainer_state)
-                        
+
                         eval_loss = 0.0
                         steps = 0
 
@@ -498,7 +508,6 @@ class SetFitModel(PyTorchModelHubMixin):
                         self.model_head.train()
                         if not end_to_end:
                             self.freeze("body")
-                        
 
                 scheduler.step()
                 callback_handler.on_epoch_end(trainer_state)

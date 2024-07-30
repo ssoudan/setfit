@@ -771,12 +771,12 @@ class Trainer(ColumnMappingMixin):
         return checkpoint_file_path
 
     def train_classifier(
-        self, 
-        x_train: List[str], 
-        y_train: Union[List[int], List[List[int]]], 
+        self,
+        x_train: List[str],
+        y_train: Union[List[int], List[List[int]]],
         x_eval: Optional[List[str]] = None,
         y_eval: Optional[Union[List[int], List[List[int]]]] = None,
-        args: Optional[TrainingArguments] = None
+        args: Optional[TrainingArguments] = None,
     ) -> None:
         """
         Method to perform the classifier phase: fitting a classifier head.
@@ -800,7 +800,7 @@ class Trainer(ColumnMappingMixin):
             x_train,
             y_train,
             x_eval=x_eval,
-            y_eval=y_eval,            
+            y_eval=y_eval,
             num_epochs=args.classifier_num_epochs,
             batch_size=args.classifier_batch_size,
             body_learning_rate=args.body_classifier_learning_rate,
