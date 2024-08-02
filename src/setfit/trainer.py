@@ -813,6 +813,7 @@ class Trainer(ColumnMappingMixin):
             logging_steps=args.logging_steps,
             eval_steps=eval_steps,
             eval_max_steps=eval_max_steps,
+            early_stopping_patience=args.classifier_early_stopping_patience,
         )
 
     def evaluate(self, dataset: Optional[Dataset] = None, metric_key_prefix: str = "test") -> Dict[str, float]:

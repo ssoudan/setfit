@@ -152,6 +152,9 @@ class TrainingArguments:
         save_total_limit (`int`, *optional*, defaults to `1`):
             If a value is passed, will limit the total amount of checkpoints. Deletes the older checkpoints in
             `output_dir`. Note, the best model is always preserved if the `evaluation_strategy` is not `"no"`.
+        classifier_early_stopping_patience (`int`, *optional*, defaults to `3`):
+            The number of evaluations to wait for an improvement before early stopping the training of the classifier.
+            If set to None, early stopping is disabled. Only used with a differentiable PyTorch head.
         load_best_model_at_end (`bool`, *optional*, defaults to `False`):
             Whether or not to load the best model found during training at the end of training.
 
@@ -216,6 +219,8 @@ class TrainingArguments:
     save_strategy: str = "steps"
     save_steps: int = 500
     save_total_limit: Optional[int] = 1
+
+    classifier_early_stopping_patience: Optional[int] = 3
 
     load_best_model_at_end: bool = False
     metric_for_best_model: str = field(default="embedding_loss", repr=False)

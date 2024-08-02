@@ -231,8 +231,9 @@ class TrainerCallback:
     def on_eval_begin(self, state: TrainerState):
         pass
 
-    def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
-        pass
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor) -> bool:
+        # return True to stop training
+        return False
 
 
 class TrainerCallbacksHandler:
@@ -279,9 +280,13 @@ class TrainerCallbacksHandler:
         for callback in self.callbacks:
             callback.on_eval_begin(state)
 
-    def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor) -> bool:
+        should_stop = False
         for callback in self.callbacks:
-            callback.on_eval_end(state, loss)
+            should_stop_ = callback.on_eval_end(state, loss)
+            should_stop = should_stop or should_stop_
+
+        return should_stop
 
 
 class TensorboardCallback(TrainerCallback):
@@ -309,6 +314,33 @@ class TensorboardCallback(TrainerCallback):
 
     def on_eval_end(self, state: TrainerState, loss: torch.Tensor):
         self.writer.add_scalar("eval/classifier_loss", loss, state.global_step, new_style=True)
+
+
+class EarlyStoppingCallback(TrainerCallback):
+    """A callback to stop training early if the evaluation loss does not improve.
+
+    Args:
+        patience (`int`, defaults to `3`): The number of epochs to wait before stopping training.
+        min_delta (`float`, defaults to `0.0`): The minimum change in loss to be considered an improvement.
+    """
+
+    def __init__(self, patience: int = 3, min_delta: float = 0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.wait = 0
+        self.best_loss = float("inf")
+
+    def on_eval_end(self, state: TrainerState, loss: torch.Tensor) -> bool:
+        if loss < self.best_loss - self.min_delta:
+            self.best_loss = loss
+            self.wait = 0
+        else:
+            self.wait += 1
+
+        if self.wait >= self.patience:
+            return True
+
+        return False
 
 
 @dataclass
@@ -380,6 +412,7 @@ class SetFitModel(PyTorchModelHubMixin):
         eval_steps: Optional[int] = None,
         eval_max_steps: Optional[int] = None,
         eval_batch_size: int = 1,
+        early_stopping_patience: Optional[int] = None,
     ) -> None:
         """Train the classifier head, only used if a differentiable PyTorch head is used.
 
@@ -407,6 +440,8 @@ class SetFitModel(PyTorchModelHubMixin):
             eval_steps (`int`, *optional*): The step interval to evaluate the model on the evaluation set.
             eval_max_steps (`int`, *optional*): The maximum number of steps to evaluate the model on the evaluation set.
             eval_batch_size (`int`, defaults to `1`): The batch size to use for evaluation.
+            early_stopping_patience (`int`, *optional*): The number of epochs to wait before stopping training if the
+                evaluation loss does not improve.
         """
         if self.has_differentiable_head:  # train with pyTorch
             self.model_body.train()
@@ -418,6 +453,7 @@ class SetFitModel(PyTorchModelHubMixin):
 
             callback_handler = TrainerCallbacksHandler(
                 [TensorboardCallback(logging_dir=logging_dir, logging_steps=logging_steps)]
+                + ([EarlyStoppingCallback(patience=early_stopping_patience)] if early_stopping_patience else [])
             )
 
             dataloader = self._prepare_dataloader(x_train, y_train, batch_size, max_length)
@@ -501,7 +537,12 @@ class SetFitModel(PyTorchModelHubMixin):
                         if steps > 0:
                             eval_loss /= steps
 
-                        callback_handler.on_eval_end(trainer_state, eval_loss)
+                        should_stop = callback_handler.on_eval_end(trainer_state, eval_loss)
+                        if should_stop:
+                            callback_handler.on_train_end(trainer_state)
+                            if not end_to_end:
+                                self.unfreeze("body")
+                            return
 
                         # set model to training mode
                         self.model_body.train()
