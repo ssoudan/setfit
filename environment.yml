@@ -10,7 +10,7 @@ dependencies:
     - datasets>=2.3.0
     - sentence-transformers>=2.2.1
     - evaluate>=0.3.0
-    - huggingface-hub>=0.13.0, <=0.23.5
+    - huggingface-hub>=0.21.0
     - scikit-learn
     - packaging
     - pytest
